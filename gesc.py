@@ -396,13 +396,15 @@ def gesc(MED_GESC,FT,NR,max_mode,freq):
         A,B = RayBC(C,A)
         C,nerr = EigRW(C,A,B,max_mode)
         if (nerr==1): continue
-            
+
+        '''    
         # Love waves:
         A = LoveInnerMat(C,C[0].omega)
         A,B = LoveBC(C,A);
         C,nerr = EigLW(C,A,B,max_mode)
         if (nerr==1): continue
         C[0]['Nmode'] = min([max_mode, len(C[0].kl), len(C[0].kr)])
+        '''
 
         # get group velocity and integrals:
         C=get_integrals_sw(C)
@@ -452,16 +454,16 @@ def RayInnerMat(C,omega,verbose=False):
 
 def RayBC(C,A):
     Nl = C[0]['Nl'];   # number of layers
-    B  = np.eye(size(A));
+    B  = np.eye(A.shape[0])
 
     '''
     Bottom BC's (remove two above)
     '''
     
     # Uz =0 bottom
-    A[0,:] = 0
-    A[0,1] = 1
-    B[0,:] = 0
+    A[C[0]['N'],:] = 0
+    A[C[0]['N'],1] = 1
+    B[C[0]['N'],:] = 0
 
     # Ux = 0
     A[0,         :] = 0
@@ -470,35 +472,39 @@ def RayBC(C,A):
 
     # for each interface (replace one above and one below the interface)
     #disp('series 1')
-    n = 0;
-    for ii in range(Nl):
-        n = n + 4*C(ii)['N'];
+    n = -1 # I think this single change fixes most mATLAB->python indexing
+    for ii in range(Nl-1):
+        Nii = C[ii]['N']
+        n = n + 4*Nii
+        j = n - Nii
+
         # Continuity conditions
         # stress sigma_zz
-        A[n-C(ii)['N'],:] = 0
-        B[n-C(ii)['N'],:] = 0
-        A[n-C(ii)['N'],n-3*C(ii  )['N']+1:n-2*C(ii  )['N']] = -C(ii  )['lambdmu'][-1] * C[ii  ]['D'][-1, :]
-        B[n-C(ii)['N'],n-3*C(ii  )['N']                ]    = +C(ii  )['lambd']  [-1]
-        A[n-C(ii)['N'],n+  C(ii+1)['N']+1:n+2*C(ii+1)['N']] = +C(ii+1)['lambdmu'][ 0] * C[ii+1]['D'][1  ,:]
-        B[n-C(ii)['N'],n+           1               ]       = -C(ii+1)['lambd']  [ 0]
+        
+        A[j,:] = 0
+        B[j,:] = 0
+        A[j,n-3*Nii:n-2*Nii] = -C[ii  ]['lambdmu'][-1] * C[ii]['D'][-1, :]
+        B[j,n-3*Nii]         = +C[ii  ]['lambd']  [-1]
+        A[j,n+Nii:n+2*Nii]   = +C[ii+1]['lambdmu'][ 0] * C[ii]['D'][1  ,:]
+        B[j,n+1]             = -C[ii+1]['lambd']  [ 0]
 
         # Continuity conditions on sigma_xz (R4)
         A[n,:] =  0
         A[n,n] = -1
-        A[n,n+3*C(ii+1)['N']+1] = 1
+        A[n,n+3*C[ii+1]['N']+1] = 1
         B[n,:] =  0
 
 
         # continuous r1 (ux)
         A[n+1,            :]    =  0
-        A[n+1,n-3*C(ii  )['N']] = -1
+        A[n+1,n-3*C[ii  ]['N']] = -1
         A[n+1,n+1]              =  1
         B[n+1          ,  :]    =  0
 
         # Continuity conditions on uz (r2)
         A[n+1+C[ii+1]['N'],          :] =  0
-        A[n+1+C[ii+1]['N'],n-2*C(ii)['N']] = -1
-        A[n+1+C[ii+1]['N'],n+1+C(ii+1)['N']] =  1
+        A[n+1+C[ii+1]['N'],n-2*C[ii]['N']] = -1
+        A[n+1+C[ii+1]['N'],n+1+C[ii+1]['N']] =  1
         B[n+1+C[ii+1]['N'],          :] =  0
 
 
@@ -510,16 +516,146 @@ def RayBC(C,A):
     Top BC's
     '''
     # free traction: impose on r3 the condition sigma_zz=0
-    A[-C[-1]['N'],:]=0;
-    B[-C[-1]['N'],:]=0;
-    A[-C[-1]['N'],end-3*C[-1]['N']+1:end-2*C[-1]['N']] = -C[-1]['lambdmu'][-1]*C[-1]['D'][-1,:]
-    B[-C[-1]['N'],end-3*C[-1]['N']                 ]   = +C[-1]['lambd']  [-1];
-     # sigma_xz (R4=0) sigma_xz==0
+    A[-1-C[-1]['N'],:] = 0
+    B[-1-C[-1]['N'],:] = 0
+    A[-1-C[-1]['N'],-1-3*C[-1]['N']:-1-2*C[-1]['N']] = -C[-1]['lambdmu'][-1]*C[-1]['D'][-1,:]
+    B[-1-C[-1]['N'],-1-3*C[-1]['N']                 ]   = +C[-1]['lambd']  [-1]
+
+    # sigma_xz (R4=0) sigma_xz==0
     #  disp(C[-1].solid)
     #  if (C[-1].solid==1)
     A[-1,:] = 0
     A[-1,-1] = 1
     B[-1,:] = 0
-    #  end
     
     return A,B
+
+def EigRW(C,A,B,Nmode):
+    nerr = 0
+    Nl = C[0]['Nl']
+
+    ## solve GEP
+    # [Ll,Lr] = RaySel(C);
+
+    A[np.isnan(A)] = 0
+    A[np.isinf(A)] = 0
+    B[np.isnan(B)] = 0
+    B[np.isinf(B)] = 0
+    Anew=A;
+    Bnew=B;
+    
+    '''
+    % Anew = (Ll*A*Lr);
+
+    % Bnew = (Ll*B*Lr);
+    % if min(C(1).mu1D)==0 % if there is a water layer at the top
+    % %     % impose continuity condition for r2
+    % disp('got water')
+    %     n=C(end).N;
+    %    Anew(end-2*n+1,:)=0;
+    %    Anew(end-2*n+1,end-2*n-C(end-1).N)=-1;
+    %    Anew(end-2*n+1,end-2*n)=1;
+    %    Bnew(end-2*n+1,:)=0;
+    %    
+    %    % R2=0
+    %    Anew(end-C(end).N,:)=0;
+    % Bnew(end-C(end).N,:)=0;
+    % Anew(end-C(end).N,end-3*C(end).N+1:end-2*C(end).N) = -C(end).lambdamu(end).*C(end).D(end,:); % )
+    % Bnew(end-C(end).N,end-3*C(end).N                 ) = +C(end).lambda  (end);
+    % 
+    % 
+    % end
+    '''
+
+    [X,k] = np.linalg.eig(Anew,Bnew)
+    %[X,k] = eig(A,B)
+
+    k = diag(k)
+    ik = np.where(np.real(k)/np.imag(k)>=1E15 & np.real(k) ~= np.inf & np.real(k) > 0 & C[0]['omega']/np.real[k]>0.1) 
+    k = k[ik]
+    X = X(:,ik)
+    [k,ii] = sort(k,'descend')
+    X = X(:,ii);
+
+    # figure(301)
+    # plot(C(1).omega/2/pi./k,'o');grid on
+    # pause
+
+    disp(['# of Rayleigh modes found: ' int2str(length(k))])
+    if isempty(k):
+        nerr = 1
+        return
+
+    #disp('magic')
+    #size(X)
+    # X = Lr*X;
+    #size(X)
+    #figure; plot(X(:,1))
+    #disp('magic')
+    #figure; imagesc(Lr); 
+
+    n1=0;W=[];bigD=0;
+    for i in range(C[0]['Nl']):
+        n2 = n1 + C(i).N;
+        bigD(n1+1:n2,n1+1:n2)=C(i).D;
+        [~,W(n1+1:n2)]=clencurt(C(i).N-1);
+        W(n1+1:n2) = C(i).H/2*W(n1+1:n2);
+        C(i).nn=[n1 n2];
+        n1=n2;
+
+    C(1).BigD = bigD;
+    C(1).W = W;
+
+
+    %% eigenfunctions:
+    C(1).ux = zeros(C(1).Ntot,1);
+    C(1).uz = zeros(C(1).Ntot,1);
+    C(1).r3 = zeros(C(1).Ntot,1);
+    C(1).r4 = zeros(C(1).Ntot,1);
+    C(1).szz= zeros(C(1).Ntot,1);
+
+    for ik=1:min([length(k) Nmode])
+        n=0;
+        toto1=X(0*C(1).N+1:1*C(1).N,ik)';
+        toto2=X(1*C(1).N+1:2*C(1).N,ik)';
+        toto3=X(2*C(1).N+1:3*C(1).N,ik)';
+        toto4=X(3*C(1).N+1:4*C(1).N,ik)';
+        for i=2:Nl
+          n = n + 4*C(i-1).N;
+          toto1 = [toto1 , X(n+0*C(i).N+1:n+1*C(i).N,ik)'];
+          toto2 = [toto2 , X(n+1*C(i).N+1:n+2*C(i).N,ik)'];
+          toto3 = [toto3 , X(n+2*C(i).N+1:n+3*C(i).N,ik)'];
+          toto4 = [toto4 , X(n+3*C(i).N+1:n+4*C(i).N,ik)'];
+        end
+        
+        normind=C(1).Ntot;
+    %     for ii=Nl:-1:1; if (C(1).solid(ii)~=1); normind=normind-C(ii).N; break ; end; end;
+        %[null,normind] = min(C.solid1D); normind = normind-1;
+        %if (min(C(1).solid1D)==1); normind=length(C(1).solid1D); end;
+        %if (max(C(1).solid1D)==0); normind=length(C(1).solid1D); end;
+    %     normalize=max(abs(toto2))*sign(toto2(end));%(normind);
+    %     if ik==1;normalize=toto2(end);end
+    %     if (normalize==0); normalize = max(toto2); end;
+        normalize=toto2(end);
+        C(1).ux(:,ik) = toto1/normalize;
+        C(1).uz(:,ik) = toto2/normalize;
+        C(1).r3(:,ik) = toto3/normalize;
+        C(1).r4(:,ik) = toto4/normalize;
+    '''
+    %     if ik==1&& min(toto2)*max(toto2)<0&&min(toto2)<-0.1;
+    %             disp('modes flipped')
+    %     end
+    %     CC.ux(:,ik) = toto1;
+    %     CC.uz(:,ik) = toto2;
+    %     CC.r3(:,ik) = toto3./CC.ux(end,ik);
+    %     CC.r4(:,ik) = toto4./CC.ux(end,ik);
+    %     CC.uz(:,ik) = CC.uz(:,ik)./CC.ux(end,ik);CC.ux(:,ik)=CC.ux(:,ik)./CC.ux(end,ik); 
+    '''
+        C(1).kr(ik)=k(ik);
+
+        C(1).szz(:,ik) = 4*(C(1).mu1D.*(C(1).lambda1D+C(1).mu1D)./C(1).lambdamu1D).*(C(1).BigD*C(1).uz(:,ik))' ...
+            + C(1).lambda1D./C(1).lambdamu1D.*C(1).r3(:,ik)';
+        
+        
+    #end
+        return C, nerr
