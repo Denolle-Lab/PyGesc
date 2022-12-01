@@ -1,5 +1,6 @@
 from gesc import *
-
+import os
+os.system('clear')
 ## TIME /FREQUENCY:
 typ = 't'          # 't': enters time series length (win= in s) and rate (rate=1/s)
                     # 'f': enters frequency series length (win=in Hz) and rate
@@ -17,7 +18,7 @@ beta = 3*np.array([0.5, 1])      # (km/s) S-wavespeed
 alpha = 5.4*np.array([0.5, 1])   # sqrt(3)*beta # (km/s) P-wavespeed 
 rho = 2.27*np.array([0.5, 1])    # (kg/dm^3) density
 Dmax=30*max(beta)/FT['df']       # (km) "half space" effective thickness, matters for long period
-typ = ('lin','cst')              # constant within layers: 'cst', all gradients 'grad'
+typ = ('cst','lin')              # constant within layers: 'cst', all gradients 'grad'
 MED = make_layers(H,Dmax,alpha,beta,rho,typ)
 
 NR = {'typ':'rec',       # choose recursive

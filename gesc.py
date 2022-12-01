@@ -5,6 +5,7 @@
 # Marine Denolle (09/2014)
 
 import numpy as np
+from scipy.linalg import eig
 
 # Create time/frequency structure FT
 def make_ft(win,rate,typ):
@@ -90,7 +91,6 @@ def make_layers(H,Dmax,alpha,beta,rho,typ):
         if beta[ii]!=0: 
             MED[0]['solid'][Nl-ii-1]=1
 
-
     # create medium in vectors
     z=np.array([])
     a=np.array([])
@@ -111,8 +111,7 @@ def make_layers(H,Dmax,alpha,beta,rho,typ):
             b = np.hstack([np.linspace(beta[i],beta[i-1],50), b])   # beta / S wave velocity vector
             r = np.hstack([np.linspace(rho[i],rho[i-1],50), r])     # rho /  density vector
         else:
-            print('Enter type of layer poperly')
-            return []
+            raise ValueError('Enter type of layer poperly')
 
     # remove overlapping point (2 points have the same depth H1, H1)
     trash,ib = np.unique(z, return_index=True)
@@ -123,7 +122,13 @@ def make_layers(H,Dmax,alpha,beta,rho,typ):
     MED[0]['beta'] = b[ib]
     MED[0]['rho'] = r[ib]
     MED[0]['inter'] = H
-    MED[0]['Nl'] = Nl 
+    MED[0]['Nl'] = Nl
+
+    # added by bpl
+    typ0 = 'cst'
+    for t in typ:
+        if t == 'lin': typ0 = 'lin'
+    MED[0]['typ'] = typ0
                
     # break into layers: elastic properties have to be contained within layer
     temp_layers = []
@@ -159,6 +164,7 @@ from numpy.matlib import repmat
 def cheb(N):
     # CHEB  compute D = differentiation matrix, x = Chebyshev grid
     if N==0: return 0,1
+    print(N)
     x = np.cos(np.pi*(np.arange(N+1))/N)
     x = np.array([x]).T
     c = np.hstack([2, np.ones(N-1), 2]) * np.power(-1,np.arange(N+1)) #
@@ -210,6 +216,7 @@ def gesc(MED_GESC,FT,NR,max_mode,freq):
     nerr=1
 
     nf = len(FT['omega'])
+    bigC = []
     for ifreq in range(nf):
         if FT['omega'][ifreq]==0: continue
 
@@ -219,7 +226,7 @@ def gesc(MED_GESC,FT,NR,max_mode,freq):
         # If most of the eigenfunction variations is trapped within the upper
         # layer, we split that layer to reduce the number of points required to
         # solve the strong variations in the layer. Dichotomy process!
-
+        print('Determining whether to add more layers...')
         if (ifreq==0) | (nerr==1):
             C1 = [{}]
             C1[0]['cl'] = []
@@ -229,14 +236,18 @@ def gesc(MED_GESC,FT,NR,max_mode,freq):
             C1[0]['Nl'] = MED[0]['Nl']
             HH =  max(MED_GESC[0]['inter'])
         else:
-            ikk=find(C1[0]['uz'][:,1]<=1E-2*abs(C1[0]['uz'][end,1]))
-            HH=C1[0]['zz'](ikk(end))
+            ikk=np.where(C1[0]['uz'][:,0] <= 1E-2*np.abs(C1[0]['uz'][-1,0]))[0]
+            HH=C1[0]['zz'][ikk[-1]]
 
-            
-        if (ifreq>0) & (HH< MED_GESC[0]['inter'][-2]):
-            C.append({})
+        if ((ifreq>0) & (HH < MED_GESC[0]['inter'][-2])):
 
-            if MED_GESC[0]['typ'] == 'cst':  # if this a layered medium with homoheneous layers
+            print(f'\tAdding a layer because first wavelength {HH:.3f}'  \
+                   f"km < {MED[0]['inter'][-2]:.3f} km")
+            if MED_GESC[0]['typ'] == 'cst':  
+                # if this a layered medium with homoheneous layers
+                aa = np.zeros(len(MED_GESC[0]['inter'])+1)
+                bb = np.zeros_like(aa)
+                rr = np.zeros_like(aa)
                 for i in range(len(MED_GESC[0]['inter'])):
                     ikk=np.argmin(abs(MED_GESC[0]['z']-MED_GESC[0]['inter'][i]))
                     aa[i] = MED_GESC[0]['alpha'][ikk]
@@ -247,35 +258,35 @@ def gesc(MED_GESC,FT,NR,max_mode,freq):
                 bb[i+1] = bb[i]
                 rr[i+1] = rr[i]
                 
-                aa=fliplr(aa);
-                bb=fliplr(bb);
-                rr=fliplr(rr);
+                aa = aa[::-1]
+                bb = bb[::-1]
+                rr = rr[::-1]
                 
-                MED[0]['inter'] = [0, HH, fliplr(MED_GESC[0]['inter'][1:-2])]
-                MED= make_layers(MED[0]['inter'],MED_GESC[0]['Dmax'],aa,bb,rr,MED_GESC[0]['typ']);
+                MED[0]['inter'] = np.hstack([np.array(0.0), 
+                                            np.array(HH), 
+                                            MED_GESC[0]['inter'][0:-1][::-1] ])
+                MED = make_layers(MED[0]['inter'],
+                              MED_GESC[0]['Dmax'],aa,bb,rr,MED_GESC[0]['typ'])
 
             elif MED_GESC[0]['typ'] == 'lin':  # if you have gradients
                 i=MED_GESC[0]['Nl']
                 MED[0]['inter']=[MED_GESC[0]['inter'][1:-2], HH, 0];
                 MED[0]['Nl']=len(MED[0]['inter']);
                 for i in range(MED[0]['Nl']-1,MED[0]['Nl']):
-                    MED[i]['zz']     = linspace(MED[0]['inter'](i-1),MED[0]['inter'][i],30)
+                    MED[i]['zz']     = np.linspace(MED[0]['inter'][i-1],
+                                                MED[0]['inter'][i],30)
                     
-                    MED[i]['alphal'] = interp1d(MED_GESC[0]['z'],
-                                               MED_GESC[0]['alpha'],
-                                               MED[i]['zz'],'linear')
-                    
-                    MED[i]['betal']  = interp1d(MED_GESC[0]['z'],
-                                               MED_GESC[0]['beta'], 
-                                               MED[i]['zz'],'linear')
-                    
-                    MED[i]['rhol']   = interp1d(MED_GESC[0]['z'],
-                                               MED_GESC[0]['rho'],  
-                                               MED[i]['zz'],'linear')
-                    
-            print([f'Added a layer because first wavelength is {HH}'  \
-                   f"km compared to {MED[0]['inter'](end-1)} km"])
+                    f = interp1d(MED_GESC[0]['z'], MED_GESC[0]['alpha'])
+                    MED[i]['alphal'] = f(MED[i]['zz'])
 
+                    f = interp1d(MED_GESC[0]['z'], MED_GESC[0]['beta'])
+                    MED[i]['betal'] = f(MED[i]['zz'])
+                    
+                    f = interp1d(MED_GESC[0]['z'], MED_GESC[0]['rho'])
+                    MED[i]['rhol'] = f(MED[i]['zz'])
+                    
+        else:
+            print('\tNot adding layers')
             
         C[0]['Nl'] = MED[0]['Nl']
         C[0]['omega']=FT['omega'][ifreq]
@@ -283,9 +294,7 @@ def gesc(MED_GESC,FT,NR,max_mode,freq):
         C[0]['solid']=MED[0]['solid']
 
         T=2*np.pi/C[0]['omega'];
-        print(f"Period: {T} s and Frequency {C[0]['omega']/(2*np.pi)} Hz")
-
-
+        print(f"Period: {T:.2f} s and Frequency {C[0]['omega']/(2*np.pi)} Hz")
         for i in range(C[0]['Nl']):
              # find appropriate number of points for each layer   
             if i==0: #halfspace
@@ -307,17 +316,20 @@ def gesc(MED_GESC,FT,NR,max_mode,freq):
                     # find peak gradient in that layer
                     if (C[0]['Nl']==C1[0]['Nl'] | i < C1[0]['Nl']) & nerr==0:
                         for imode in range(1): #?
-                            n1=range(C1[i]['nn'][0]+1,C1[i]['nn'](2))
+                            n1=range(C1[i]['nn'][0],C1[i]['nn'][1])
                             u1=C1[0]['ux'][n1,imode]
                             u2=C1[0]['uy'][n1,imode]
                             u3=C1[0]['uz'][n1,imode]
-                            dr1 = max(abs(C1[i]['D']*u1));
-                            dl1 = max(abs(C1[i]['D']*u2));
-                            dr2 = max(abs(C1[i]['D']*u3));
-                            grd[imode] = np.mean([dr1, dr2, dl1])
-                        mgrd=mean(grd)
+                            dr1 = max(abs(C1[i]['D'].dot(u1)))
+                            dl1 = max(abs(C1[i]['D'].dot(u2)))
+                            dr2 = max(abs(C1[i]['D'].dot(u3)))
+                            #grd[imode] = np.mean([dr1, dr2, dl1])
+                            grd = np.mean([dr1, dr2, dl1])
+                        mgrd=np.mean(grd)
                 C[i]['N'] = min(max(
-                                np.floor( NR['N1']*mgrd*C[i]['H']),NR['N1']),NR['N2'])
+                                np.floor( NR['N1']*mgrd*C[i]['H']),
+                                            NR['N1']),NR['N2'])
+
 
             # now you have H and N, define Cheb D
             D, x = cheb(C[i]['N']-1)     # differentiation matrix
@@ -386,6 +398,8 @@ def gesc(MED_GESC,FT,NR,max_mode,freq):
 
         if ifreq>1 & C[0]['Ntot'] > 500:  return
         
+        print(f"Finished calculating C matrix in each layer:\n"\
+              f"\tNl = { C[0]['Nl']}\n\tlen(C)={len(C)}")
         
         '''
         solve eigenproblem
@@ -402,23 +416,23 @@ def gesc(MED_GESC,FT,NR,max_mode,freq):
         A = LoveInnerMat(C,C[0].omega)
         A,B = LoveBC(C,A);
         C,nerr = EigLW(C,A,B,max_mode)
-        if (nerr==1): continue
-        C[0]['Nmode'] = min([max_mode, len(C[0].kl), len(C[0].kr)])
         '''
+        if (nerr==1): continue
+        #C[0]['Nmode'] = min([max_mode, len(C[0].kl), len(C[0].kr)])
+        C[0]['Nmode'] = min([max_mode, len(C[0]['kr'])])
 
         # get group velocity and integrals:
         C=get_integrals_sw(C)
 
         C1=C
-        bigC[ifreq] = struct('a',C)
-        junk,ib=np.unique(C[0].zz);
-        uyi[ifreq] = interp1interp1d(C[0].zz(ib),C[0].uy(ib),5,'linear');
-
+        #bigC[ifreq] = C
+        bigC.append(C)
+        #junk,ib=np.unique(C[0]['zz'])
+        #uyi[ifreq] = interp1(C[0]['zz'][ib],C[0]['uy'][ib],5,'linear');
     return bigC 
 
 from numpy import diag
 def RayInnerMat(C,omega,verbose=False):
-    
     Nl = C[0]['Nl']   # number of layers
     A =  np.zeros((4*C[0]['Ntot'],4*C[0]['Ntot']))
     if verbose: print(f"A.shape={A.shape}")
@@ -530,6 +544,12 @@ def RayBC(C,A):
     
     return A,B
 
+
+
+
+
+
+
 def EigRW(C,A,B,Nmode):
     nerr = 0
     Nl = C[0]['Nl']
@@ -567,22 +587,25 @@ def EigRW(C,A,B,Nmode):
     % end
     '''
 
-    [X,k] = np.linalg.eig(Anew,Bnew)
-    %[X,k] = eig(A,B)
-
-    k = diag(k)
-    ik = np.where(np.real(k)/np.imag(k)>=1E15 & np.real(k) ~= np.inf & np.real(k) > 0 & C[0]['omega']/np.real[k]>0.1) 
+    k,X = eig(Anew,b=Bnew)
+    #[X,k] = eig(A,B)
+    ik = np.where(  (np.real(k)/np.imag(k) >= 1e15) & \
+                    (~np.isinf(np.real(k)) ) & \
+                    (np.real(k) > 0) & \
+                    (C[0]['omega']/np.real(k)>0.1) \
+                )[0]
     k = k[ik]
-    X = X(:,ik)
-    [k,ii] = sort(k,'descend')
-    X = X(:,ii);
+    X = X[:,ik]
+    ii = np.argsort(k)[::-1]
+    k = np.sort(k)[::-1]
+    X = X[:,ii]
 
     # figure(301)
-    # plot(C(1).omega/2/pi./k,'o');grid on
+    # plot(C(1).omega/2/pi/k,'o');grid on
     # pause
 
-    disp(['# of Rayleigh modes found: ' int2str(length(k))])
-    if isempty(k):
+    print(f'\t...Rayleigh modes found: {len(k)}')
+    if len(k)==0:
         nerr = 1
         return
 
@@ -594,68 +617,171 @@ def EigRW(C,A,B,Nmode):
     #disp('magic')
     #figure; imagesc(Lr); 
 
-    n1=0;W=[];bigD=0;
+    n1=0
+    W=np.zeros(C[0]['Ntot'])
+    bigD=np.zeros((C[0]['Ntot'],C[0]['Ntot']))
     for i in range(C[0]['Nl']):
-        n2 = n1 + C(i).N;
-        bigD(n1+1:n2,n1+1:n2)=C(i).D;
-        [~,W(n1+1:n2)]=clencurt(C(i).N-1);
-        W(n1+1:n2) = C(i).H/2*W(n1+1:n2);
-        C(i).nn=[n1 n2];
-        n1=n2;
+        n2 = n1 + C[i]['N']
+        bigD[n1:n2,n1:n2]=C[i]['D']
+        trash,W[n1:n2] = clencurt(C[i]['N']-1)
+        W[n1+1:n2] = C[i]['H']/2*W[n1+1:n2]
+        C[i]['nn']=[n1, n2]
+        n1=n2
 
-    C(1).BigD = bigD;
-    C(1).W = W;
+    C[0]['BigD'] = bigD
+    C[0]['W'] = W
 
 
-    %% eigenfunctions:
-    C(1).ux = zeros(C(1).Ntot,1);
-    C(1).uz = zeros(C(1).Ntot,1);
-    C(1).r3 = zeros(C(1).Ntot,1);
-    C(1).r4 = zeros(C(1).Ntot,1);
-    C(1).szz= zeros(C(1).Ntot,1);
+    ## eigenfunctions:
+    C[0]['kr'] = np.zeros(C[0]['Ntot'],dtype=complex)
+    C[0]['ux'] = np.zeros((C[0]['Ntot'],1),dtype=complex)
+    C[0]['uy'] = np.zeros((C[0]['Ntot'],1),dtype=complex) # nada
+    C[0]['uz'] = np.zeros((C[0]['Ntot'],1),dtype=complex)
+    C[0]['r3'] = np.zeros((C[0]['Ntot'],1),dtype=complex)
+    C[0]['r4'] = np.zeros((C[0]['Ntot'],1),dtype=complex)
+    C[0]['szz']= np.zeros((C[0]['Ntot'],1),dtype=complex)
 
-    for ik=1:min([length(k) Nmode])
-        n=0;
-        toto1=X(0*C(1).N+1:1*C(1).N,ik)';
-        toto2=X(1*C(1).N+1:2*C(1).N,ik)';
-        toto3=X(2*C(1).N+1:3*C(1).N,ik)';
-        toto4=X(3*C(1).N+1:4*C(1).N,ik)';
-        for i=2:Nl
-          n = n + 4*C(i-1).N;
-          toto1 = [toto1 , X(n+0*C(i).N+1:n+1*C(i).N,ik)'];
-          toto2 = [toto2 , X(n+1*C(i).N+1:n+2*C(i).N,ik)'];
-          toto3 = [toto3 , X(n+2*C(i).N+1:n+3*C(i).N,ik)'];
-          toto4 = [toto4 , X(n+3*C(i).N+1:n+4*C(i).N,ik)'];
-        end
-        
-        normind=C(1).Ntot;
-    %     for ii=Nl:-1:1; if (C(1).solid(ii)~=1); normind=normind-C(ii).N; break ; end; end;
-        %[null,normind] = min(C.solid1D); normind = normind-1;
-        %if (min(C(1).solid1D)==1); normind=length(C(1).solid1D); end;
-        %if (max(C(1).solid1D)==0); normind=length(C(1).solid1D); end;
-    %     normalize=max(abs(toto2))*sign(toto2(end));%(normind);
-    %     if ik==1;normalize=toto2(end);end
-    %     if (normalize==0); normalize = max(toto2); end;
-        normalize=toto2(end);
-        C(1).ux(:,ik) = toto1/normalize;
-        C(1).uz(:,ik) = toto2/normalize;
-        C(1).r3(:,ik) = toto3/normalize;
-        C(1).r4(:,ik) = toto4/normalize;
-    '''
-    %     if ik==1&& min(toto2)*max(toto2)<0&&min(toto2)<-0.1;
-    %             disp('modes flipped')
-    %     end
-    %     CC.ux(:,ik) = toto1;
-    %     CC.uz(:,ik) = toto2;
-    %     CC.r3(:,ik) = toto3./CC.ux(end,ik);
-    %     CC.r4(:,ik) = toto4./CC.ux(end,ik);
-    %     CC.uz(:,ik) = CC.uz(:,ik)./CC.ux(end,ik);CC.ux(:,ik)=CC.ux(:,ik)./CC.ux(end,ik); 
-    '''
-        C(1).kr(ik)=k(ik);
-
-        C(1).szz(:,ik) = 4*(C(1).mu1D.*(C(1).lambda1D+C(1).mu1D)./C(1).lambdamu1D).*(C(1).BigD*C(1).uz(:,ik))' ...
-            + C(1).lambda1D./C(1).lambdamu1D.*C(1).r3(:,ik)';
+    for ik in range(min([len(k), Nmode])):
+        n=0
+        toto1=X[0*C[0]['N']:1*C[0]['N'],ik]
+        toto2=X[1*C[0]['N']:2*C[0]['N'],ik]
+        toto3=X[2*C[0]['N']:3*C[0]['N'],ik]
+        toto4=X[3*C[0]['N']:4*C[0]['N'],ik]
+        for i in range (1,Nl):
+            n = n + 4*C[i-1]['N']
+            toto1 = np.hstack([toto1 , X[n+0*C[i]['N']:n+1*C[i]['N'],ik]])
+            toto2 = np.hstack([toto2 , X[n+1*C[i]['N']:n+2*C[i]['N'],ik]])
+            toto3 = np.hstack([toto3 , X[n+2*C[i]['N']:n+3*C[i]['N'],ik]])
+            toto4 = np.hstack([toto4 , X[n+3*C[i]['N']:n+4*C[i]['N'],ik]])
+            
+        normind=C[0]['Ntot']
+    #     for ii=Nl:-1:1; if (C[0].solid(ii)~=1); normind=normind-C(ii).N; break ; end; end;
+        #[null,normind] = min(C.solid1D); normind = normind-1;
+        #if (min(C[0].solid1D)==1); normind=length(C[0].solid1D); end;
+        #if (max(C[0].solid1D)==0); normind=length(C[0].solid1D); end;
+    #     normalize=max(abs(toto2))*sign(toto2(end));#(normind);
+    #     if ik==1;normalize=toto2(end);end
+    #     if (normalize==0); normalize = max(toto2); end;
+        normalize=toto2[-1]
+        C[0]['ux'][:,ik] = toto1/normalize
+        C[0]['uz'][:,ik] = toto2/normalize
+        C[0]['r3'][:,ik] = toto3/normalize
+        C[0]['r4'][:,ik] = toto4/normalize
+    #     if ik==1&& min(toto2)*max(toto2)<0&&min(toto2)<-0.1;
+    #             disp('modes flipped')
+    #     end
+    #     CC.ux(:,ik) = toto1;
+    #     CC.uz(:,ik) = toto2;
+    #     CC.r3(:,ik) = toto3./CC.ux(end,ik);
+    #     CC.r4(:,ik) = toto4./CC.ux(end,ik);
+    #     CC.uz(:,ik) = CC.uz(:,ik)./CC.ux(end,ik);CC.ux(:,ik)=CC.ux(:,ik)./CC.ux(end,ik); 
+        C[0]['kr'][ik]=k[ik]
+        part1a = 4*(  C[0]['mu1D']*(C[0]['lambd1D'] \
+                                    + C[0]['mu1D'])/C[0]['lambdmu1D'])
+        part1b = (C[0]['BigD']*C[0]['uz'][:,ik]).T 
+        part1 = part1a.dot(part1b)
+        part2 =  C[0]['lambd1D']/C[0]['lambdmu1D']*C[0]['r3'][:,ik].T
+        C[0]['szz'][:,ik] = part1 + part2
         
         
     #end
         return C, nerr
+
+# CLENCURT  nodes x (Chebyshev points) and weights w
+#           for Clenshaw-Curtis quadrature
+
+def clencurt(N):
+    theta = np.pi*np.arange(N+1).T/N
+    x = np.cos(theta)
+    w = np.zeros(N+1)
+    ii = slice(2,N+1)
+    v = np.ones(N-1)
+
+    if N%2==0: 
+        w[0] = 1/(N**2-1)
+        w[N] = w[0]
+
+        for k in range(1,N/2-1):
+            v = v - 2*cos(2*k*theta(ii))/(4*k**2-1)
+
+        v = v - np.cos(N*theta[ii])/(N**2-1)
+    else:
+        w[0] = 1/N**2
+        w[N] = w[0]
+        for k in range ( int((N-1)/2) ):
+            v = v - 2*np.cos(2*k*theta[ii])/(4*k**2-1)
+    w[ii] = 2*v/N
+
+    return x,w
+
+
+
+
+def get_integrals_sw(C,rayleigh=True,love=False):
+    # Subroutine to get the surface waves integrals products and group velocity
+    # from  density and elastic profiles and Eigenfunctions obtained from
+    # Chebyshev collocation technique 
+    # Marine Denolle (01/27/11)
+
+
+    bigD = C[0]['BigD']
+    W  =C[0]['W']
+
+    rho=C[0]['rho1D']
+    mu=C[0]['mu1D']
+    lambd=C[0]['lambd1D']
+    lambdmu=C[0]['lambdmu1D']
+        
+    ux2=np.zeros( (len(C[0]['zz']),C[0]['Nmode']), dtype=complex)
+    uy2=np.zeros_like(ux2, dtype=complex)
+    uz2=np.zeros_like(ux2, dtype=complex)
+    C[0]['Dux']=np.zeros_like(ux2, dtype=complex)
+    C[0]['Duy']=np.zeros_like(ux2, dtype=complex)
+    C[0]['Duz']=np.zeros_like(ux2, dtype=complex)
+    C[0]['sigmazz']=np.zeros_like(ux2, dtype=complex)
+    C[0]['sigmazz2']=np.zeros_like(ux2, dtype=complex)
+    C[0]['r32']=np.zeros_like(ux2, dtype=complex)
+
+    C[0]['Ir'] = np.zeros((4,C[0]['Nmode']), dtype=complex)
+    C[0]['cr'] = np.zeros((4,C[0]['Nmode']), dtype=complex)
+    C[0]['Ur'] = np.zeros((4,C[0]['Nmode']), dtype=complex)
+
+    for i in range(C[0]['Nmode']):
+        D1ux = bigD.dot(C[0]['ux'][:,i])
+        D1uy = bigD.dot(C[0]['uy'][:,i])
+        D1uz = bigD.dot(C[0]['uz'][:,i])
+
+        ux2[:,i] = C[0]['ux'][:,i]**2
+        uy2[:,i] = C[0]['uy'][:,i]**2
+        uz2[:,i] = C[0]['uz'][:,i]**2
+
+        # integrals:
+        #Love:
+        if love:
+            C[0]['Il'][0,i] = 1/2*W.dot(rho*uy2[:,i].T)
+            C[0]['Il'][1,i] = 1/2*W.dot(mu*uy2[:,i].T)
+            C[0]['Il'][2,i] = 1/2*W.dot(mu*(D1uy**2).T)
+            C[0]['Ul'][i] = C[0]['Il'][1,i]*C[0]['kl'][i]/(C[0]['Il'][0,i]*C[0]['omega'])
+            C[0].cl[i] = C[0]['omega']/C[0]['kl'][i]
+
+        # Rayleigh:
+        if rayleigh:
+            C[0]['Ir'][0,i] = 1/2*W.dot(rho*(ux2[:,i].T+uz2[:,i].T))
+            C[0]['Ir'][1,i] = 1/2*W.dot(lambdmu*ux2[:,i].T+mu*uz2[:,i].T)
+            C[0]['Ir'][2,i] = W.dot(
+                                lambd*(C[0]['ux'][:,i]*D1uz).T \
+                                - mu*(C[0]['uz'][:,i]*D1ux).T   )
+            C[0]['Ir'][3,i] = 1/2*W.dot(lambdmu*(D1uz**2).T+mu*(D1ux**2).T)
+
+            C[0]['cr'][i] = C[0]['omega']/C[0]['kr'][i]
+            c=C[0]['cr'][i]
+            C[0]['Ur'][i] = (C[0]['Ir'][1,i]+C[0]['Ir'][2,i]/\
+                            (2*C[0]['kr'][i]))/(c*C[0]['Ir'][0,i])
+
+        C[0]['Dux'][:,i] = D1ux       
+        C[0]['Duy'][:,i] = D1uy
+        C[0]['Duz'][:,i] = D1uz
+
+    #         disp('checking sizes')
+    #         disp([size(C[0].Dux) size(C[0].ux)])
+    return C
